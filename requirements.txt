@@ -11,3 +11,4 @@ huggingface-hub<1.0.0
 numpy
 Pillow
 scikit-learn
+fpdf2
