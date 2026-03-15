@@ -61,7 +61,7 @@ def predict(img):
     return confidences, status
 
 # --- 3. Gradio Interface Construction ---
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
+with gr.Blocks as demo:
     gr.Markdown("# 🩺 DermAI: Clinical Malignancy Screening")
     
     with gr.Row():
