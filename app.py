@@ -1,86 +1,101 @@
 import gradio as gr
 import torch
-import torch.nn as nn
-from torchvision import transforms, models
-from PIL import Image
 import os
+from PIL import Image
 
-# --- 1. Model Definition ---
-# This must perfectly match the architecture used during training
-def get_model(num_classes=7):
-    model = models.convnext_tiny()
-    # Adjust the head for our 7 diagnostic classes
-    model.classifier[2] = nn.Linear(model.classifier[2].in_features, num_classes)
-    return model
+# Import the professional modules we built
+from model_utils import get_model, get_transforms, apply_clinical_logic
 
-# --- 2. Initialize and Load Weights ---
-device = torch.device("cpu")
-model = get_model()
-
-# Path to your saved model weights
+# --- 1. Configuration & Loading ---
+DEVICE = torch.device("cpu")
 MODEL_PATH = "best_melanoma_recall_model.pth"
-
-if os.path.exists(MODEL_PATH):
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-    print(f"✅ Successfully loaded weights from {MODEL_PATH}")
-else:
-    print(f"❌ Error: {MODEL_PATH} not found in root directory!")
-
-model.to(device)
-model.eval()
-
-# --- 3. Clinical Configuration ---
 CLASSES = ['AKIEC', 'BCC', 'BKL', 'DF', 'MEL', 'NV', 'VASC']
-MELANOMA_SAFETY_THRESHOLD = 0.20  # Our custom clinical override
 
-# --- 4. Image Preprocessing ---
-transform = transforms.Compose([
-    transforms.Resize(232),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
+# Initialize Model
+model = get_model(num_classes=7)
 
-# --- 5. Prediction Logic ---
+# Load weights safely
+if os.path.exists(MODEL_PATH):
+    # map_location ensures it loads on CPU even if trained on GPU
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    model.to(DEVICE)
+    model.eval()
+    print(f"✅ Model weights loaded from {MODEL_PATH}")
+else:
+    print(f"⚠️ Warning: {MODEL_PATH} not found. Check your file uploads.")
+
+# Initialize Preprocessing
+transform = get_transforms()
+
+# --- 2. Prediction Function ---
 def predict(img):
     if img is None:
-        return None, "Please upload a dermoscopic image."
+        return None, "Please upload a dermoscopic image to begin."
     
-    # Preprocess
-    img_tensor = transform(img).unsqueeze(0).to(device)
+    # Preprocess and prepare for model
+    img_tensor = transform(img).unsqueeze(0).to(DEVICE)
     
     with torch.no_grad():
         logits = model(img_tensor)
         probs = torch.softmax(logits, dim=1)[0]
     
-    # Extract Melanoma probability (Index 4)
-    mel_prob = float(probs[4])
+    # Apply our specialized 0.20 safety logic from model_utils
+    pred_idx, mel_prob = apply_clinical_logic(probs, CLASSES, threshold=0.20)
     
-    # Apply Clinical Safety Override
-    if mel_prob >= MELANOMA_SAFETY_THRESHOLD:
-        pred_idx = 4
-        clinical_status = (
-            f"🚨 CLINICAL ALERT: High Risk Detected.\n"
-            f"Melanoma Probability: {mel_prob:.2%}\n"
-            f"This exceeds the safety threshold of {MELANOMA_SAFETY_THRESHOLD:.0%}. "
-            "Flagging for urgent specialist review."
+    # Create clinical feedback message
+    if pred_idx == 4: # If the model (or override) flags Melanoma
+        status = (
+            f"🚨 CLINICAL ALERT: High Sensitivity Flag\n"
+            f"Melanoma Prob: {mel_prob:.2%}\n"
+            f"Action: Urgent Specialist Review Recommended."
         )
     else:
-        pred_idx = torch.argmax(probs).item()
-        clinical_status = (
-            f"✅ Routine Review: Primary prediction is {CLASSES[pred_idx]}.\n"
-            f"Melanoma Probability: {mel_prob:.2%}.\n"
-            "This is below the safety override threshold."
+        status = (
+            f"✅ Routine Screening\n"
+            f"Melanoma Prob: {mel_prob:.2%}\n"
+            f"Primary Prediction: {CLASSES[pred_idx]}"
         )
 
-    # Format result for Gradio Label
+    # Format for Gradio Label component
     confidences = {CLASSES[i]: float(probs[i]) for i in range(len(CLASSES))}
-    return confidences, clinical_status
+    return confidences, status
 
-# --- 6. Build the Professional Gradio UI ---
+# --- 3. Gradio Interface Construction ---
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# 🩺 DermAI: High-Sensitivity Clinical Screening")
+    gr.Markdown("# 🩺 DermAI: Clinical Malignancy Screening")
     
-    with gr.Accordion("📊 Clinical Model Audit Info", open=False):
-        gr.Markdown("""
-        **Performance Summary
+    with gr.Row():
+        with gr.Column(scale=1):
+            input_img = gr.Image(type="pil", label="Dermoscopic Image Input")
+            run_btn = gr.Button("Conduct Clinical Audit", variant="primary")
+            
+            with gr.Accordion("📋 Model Audit Specs", open=False):
+                gr.Markdown("""
+                - **Recall (MEL):** 94.64%
+                - **ROC-AUC:** 0.9564
+                - **Safety Policy:** 20% Sensitivity Override enabled.
+                """)
+        
+        with gr.Column(scale=1):
+            output_labels = gr.Label(label="Diagnostic Confidence", num_top_classes=3)
+            output_status = gr.Textbox(label="Clinical Recommendation", lines=4)
+
+    run_btn.click(
+        fn=predict, 
+        inputs=input_img, 
+        outputs=[output_labels, output_status]
+    )
+
+    gr.Markdown("---")
+    gr.Markdown(
+        "**Note:** This tool is for research purposes. All high-probability flags should be confirmed via biopsy by a certified professional."
+    )
+
+# --- 4. Docker Launch Settings ---
+if __name__ == "__main__":
+    # server_name="0.0.0.0" and server_port=7860 are REQUIRED for Hugging Face Docker Spaces
+    demo.launch(
+        server_name="0.0.0.0", 
+        server_port=7860,
+        show_api=False
+    )
