@@ -5,7 +5,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image
-from fpdf import FPDF
+from fpdf import FPDF, XPos, YPos
 from datetime import datetime
 
 # Import your architecture and logic from the local file
@@ -23,13 +23,10 @@ if os.path.exists(MODEL_PATH):
 
 transform = get_transforms()
 
-# --- 2. Explainability: Grad-CAM for ConvNeXt ---
+# --- 2. Enhanced Explainability (Smooth Heatmaps) ---
 def generate_gradcam(model, img_tensor, original_image, target_class_idx):
-    # For ConvNeXt Tiny, block 7 is the final stage before global pooling
     target_layer = model.features[7] 
-    
-    activations = []
-    gradients = []
+    activations, gradients = [], []
 
     def forward_hook(module, input, output): activations.append(output)
     def backward_hook(module, grad_in, grad_out): gradients.append(grad_out[0])
@@ -37,7 +34,6 @@ def generate_gradcam(model, img_tensor, original_image, target_class_idx):
     h1 = target_layer.register_forward_hook(forward_hook)
     h2 = target_layer.register_full_backward_hook(backward_hook)
 
-    # Forward/Backward
     logits = model(img_tensor)
     model.zero_grad()
     score = logits[0, target_class_idx]
@@ -46,106 +42,105 @@ def generate_gradcam(model, img_tensor, original_image, target_class_idx):
     grads = gradients[0].detach()
     acts = activations[0].detach()
     
-    # ConvNeXt-Tiny stage 7 output is (B, C, H, W) or (B, H, W, C) depending on version
-    # We'll calculate weights based on spatial dimensions
     weights = torch.mean(grads, dim=(2, 3), keepdim=True)
     cam = torch.sum(weights * acts, dim=1).squeeze().cpu().numpy()
     
-    # Process heatmap
     cam = np.maximum(cam, 0)
+    # SMOOTHING: Apply Gaussian Blur for a more professional look
+    cam = cv2.GaussianBlur(cam, (11, 11), 0)
     cam = cv2.resize(cam, (original_image.size[0], original_image.size[1]))
     cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
     
-    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+    # COLORMAP: Using COLORMAP_HOT for better clinical contrast
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_HOT)
     img_np = np.array(original_image.convert("RGB"))
     img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-    overlay = cv2.addWeighted(img_np, 0.6, heatmap, 0.4, 0)
+    overlay = cv2.addWeighted(img_np, 0.7, heatmap, 0.3, 0)
     
-    h1.remove()
-    h2.remove()
+    h1.remove(); h2.remove()
     return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
 
-# --- 3. Reporting Logic ---
-from fpdf import XPos, YPos
-
-# --- 3. Updated Reporting Logic (fpdf2 2.7.8+ compatible) ---
-# --- 3. Updated Reporting Logic with Writable Path ---
-def generate_report(image, diagnosis, confidence, age, sex, site, status):
+# --- 3. Clinical Reporting (No Emojis/Modern Syntax) ---
+def generate_report(diagnosis, confidence, age, sex, site, status):
     clean_status = status.replace("🚨 ", "").replace("✅ ", "")
-    
     pdf = FPDF()
     pdf.add_page()
     
     pdf.set_font("helvetica", 'B', 16)
-    pdf.cell(0, 10, text="DermAI Clinical Screening Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    pdf.cell(0, 10, text="DermAI: Clinical Decision Support Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
     
     pdf.set_font("helvetica", size=10)
-    pdf.cell(0, 10, text=f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.line(10, 30, 200, 30)
-    
+    pdf.cell(0, 10, text=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.line(10, 32, 200, 32)
+    pdf.ln(5)
+
     pdf.set_font("helvetica", 'B', 12)
-    pdf.cell(0, 10, text="Patient Info:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, text="Patient Metadata", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("helvetica", size=11)
-    pdf.cell(0, 10, text=f"Age: {age} | Sex: {sex} | Site: {site}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 8, text=f"Age: {age} | Sex: {sex} | Anatomical Site: {site}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     
     pdf.ln(5)
-    
     pdf.set_font("helvetica", 'B', 12)
-    pdf.cell(0, 10, text="Results:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, text="Automated Diagnostic Findings", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("helvetica", size=11)
-    pdf.cell(0, 10, text=f"Primary Diagnosis: {diagnosis} ({confidence})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.multi_cell(0, 10, text=f"Status: {clean_status}")
+    pdf.cell(0, 8, text=f"Primary Prediction: {diagnosis} (Confidence: {confidence})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.multi_cell(0, 8, text=f"Safety Status: {clean_status}")
     
-    # FIX: Use /tmp/ to bypass Permission Denied errors in Docker
-    report_path = "/tmp/clinical_report.pdf" 
+    report_path = f"/tmp/DermAI_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
     pdf.output(report_path)
     return report_path
 
-# --- 4. Prediction Wrapper (Updated to prevent UserWarning) ---
+# --- 4. Logic Wrapper ---
 def predict_clinical(img, age, sex, site):
-    if img is None: return None, "Upload image.", None, None
+    if img is None: return None, "Please upload an image.", None, None
     
     img_tensor = transform(img).unsqueeze(0).to(DEVICE)
     img_tensor.requires_grad = True
     
     logits = model(img_tensor)
-    # Using .detach() here prevents the PyTorch UserWarning
-    probs = torch.softmax(logits, dim=1)[0].detach() 
+    probs = torch.softmax(logits, dim=1)[0].detach()
     
+    # Clinical Safety Logic (20% Threshold for Melanoma)
     pred_idx, mel_prob = apply_clinical_logic(probs, CLASSES)
     diag = CLASSES[pred_idx]
     conf_str = f"{probs[pred_idx]:.2%}"
     
-    if pred_idx == 4:
-        status = "🚨 HIGH RISK: Melanoma safety threshold triggered."
+    if pred_idx == 4 or mel_prob > 0.20:
+        status = "🚨 HIGH RISK: Safety threshold triggered for Melanoma."
     else:
-        status = f"✅ Routine Review: Melanoma probability ({mel_prob:.2%}) low."
+        status = "✅ Routine Review: Low risk of malignancy detected."
 
-    # Need the tensor with grad for Grad-CAM, so we pass it separately or re-run
     heatmap = generate_gradcam(model, img_tensor, img, pred_idx)
-    report = generate_report(img, diag, conf_str, age, sex, site, status)
+    report = generate_report(diag, conf_str, age, sex, site, status)
     
     confidences = {CLASSES[i]: float(probs[i]) for i in range(len(CLASSES))}
     return confidences, status, report, heatmap
 
-# --- 5. UI Layout ---
-with gr.Blocks() as demo:
-    gr.Markdown("# 🩺 DermAI: Advanced Clinical Screening")
+# --- 5. UI Construction (Side-by-Side Layout) ---
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("## 🩺 DermAI: Advanced Clinical Screening Workflow")
     
     with gr.Row():
-        with gr.Column():
-            input_img = gr.Image(type="pil", label="Dermoscopic Input")
+        with gr.Column(scale=2):
+            input_img = gr.Image(type="pil", label="1. Upload Dermoscopic Image")
             with gr.Row():
                 age_in = gr.Number(label="Age", value=45)
                 sex_in = gr.Radio(["Male", "Female", "Other"], label="Sex", value="Male")
             site_in = gr.Dropdown(["Face", "Back", "Chest", "Extremity", "Other"], label="Site", value="Back")
-            run_btn = gr.Button("Analyze & Generate Report", variant="primary")
+            run_btn = gr.Button("🚀 Perform Clinical Audit", variant="primary")
         
-        with gr.Column():
-            output_labels = gr.Label(label="Diagnostic Probabilities")
-            output_heatmap = gr.Image(label="Explainability (Grad-CAM)")
-            output_status = gr.Textbox(label="Clinical Recommendation")
-            output_pdf = gr.File(label="Download PDF Report")
+        with gr.Column(scale=3):
+            with gr.Row():
+                # Side-by-Side comparison of original and explainability
+                input_preview = gr.Image(label="Original View", interactive=False)
+                output_heatmap = gr.Image(label="Explainability (Grad-CAM)")
+            
+            output_labels = gr.Label(label="Diagnostic Confidence")
+            output_status = gr.Textbox(label="Clinical Recommendation", interactive=False)
+            output_pdf = gr.File(label="Download Full Clinical Report")
+
+    # Sync input image to the preview slot automatically
+    input_img.change(fn=lambda x: x, inputs=input_img, outputs=input_preview)
 
     run_btn.click(
         fn=predict_clinical, 
@@ -154,4 +149,4 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, theme=gr.themes.Soft())
+    demo.launch(server_name="0.0.0.0", server_port=7860)
