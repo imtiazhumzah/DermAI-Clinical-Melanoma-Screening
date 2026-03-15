@@ -12,3 +12,4 @@ numpy
 Pillow
 scikit-learn
 fpdf2
+opencv-python-headless
