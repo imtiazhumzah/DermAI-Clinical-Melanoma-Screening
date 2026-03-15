@@ -115,9 +115,10 @@ def generate_report(diagnosis, confidence, age, sex, site, status, abcde):
     pdf.line(10, 32, 200, 32); pdf.ln(5)
 
     pdf.set_font("helvetica", 'B', 12)
-    pdf.cell(0, 10, text="Clinical Indicators (ABCDE)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, text="Dermatological Indicators (ABCDE)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("helvetica", size=11)
-    pdf.cell(0, 8, text=f"Asymmetry: {abcde['asymmetry']} | Border: {abcde['border']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 8, text=f"A: {abcde['asymmetry']} | B: {abcde['border']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 8, text=f"C: {abcde['color']} | D: {abcde['diameter']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     
     pdf.ln(5)
     pdf.set_font("helvetica", 'B', 12)
