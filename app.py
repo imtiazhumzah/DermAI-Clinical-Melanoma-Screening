@@ -33,37 +33,43 @@ def perform_ood_check(image):
     validity_msg = "✅ Dermoscopic Likelihood: High" if is_valid else "⚠️ Image Validity: Low (Possible Blur/Non-Dermoscopic)"
     return is_valid, reliability, validity_msg
 
-def calculate_abcde(mask):
+def calculate_abcde(img_cv, mask):
     """
-    Computes objective dermatological indicators from the lesion mask.
+    Computes A, B, C, and D indicators from the lesion and its mask.
     """
     # 1. Asymmetry (A)
-    # Compare mask to its horizontally and vertically flipped versions
     h, w = mask.shape
     flipped_h = cv2.flip(mask, 1)
-    flipped_v = cv2.flip(mask, 0)
+    asymmetry_score = np.sum(cv2.absdiff(mask, flipped_h)) / np.sum(mask)
     
-    asym_h = np.sum(cv2.absdiff(mask, flipped_h)) / np.sum(mask)
-    asym_v = np.sum(cv2.absdiff(mask, flipped_v)) / np.sum(mask)
-    asymmetry_score = (asym_h + asym_v) / 2
-    
-    # 2. Border Irregularity (B) - Compactness / Polsby-Popper Score
+    # 2. Border Irregularity (B)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    compactness = 0
+    diameter_px = 0
     if contours:
         cnt = contours[0]
         area = cv2.contourArea(cnt)
         perimeter = cv2.arcLength(cnt, True)
-        # Perfect circle has compactness of 1.0; higher = more irregular
         if area > 0:
             compactness = (perimeter**2) / (4 * np.pi * area)
-        else:
-            compactness = 0
-    else:
-        compactness = 0
+        
+        # 4. Diameter (D) - Finding the max distance between any two contour points
+        # Using a bounding box as a proxy for efficiency
+        _, _, w_box, h_box = cv2.boundingRect(cnt)
+        diameter_px = max(w_box, h_box)
+
+    # 3. Color Variation (C)
+    # Mask the original image to only look at the lesion pixels
+    lesion_pixels = cv2.bitwise_and(img_cv, img_cv, mask=mask)
+    # Calculate standard deviation of colors (excluding black background)
+    pixels = lesion_pixels[mask > 0]
+    color_std = np.std(pixels, axis=0).mean() if pixels.size > 0 else 0
 
     return {
-        "asymmetry": "High" if asymmetry_score > 0.4 else "Moderate" if asymmetry_score > 0.2 else "Low",
-        "border": "Irregular" if compactness > 1.8 else "Regular"
+        "asymmetry": "High" if asymmetry_score > 0.3 else "Low",
+        "border": "Irregular" if compactness > 1.6 else "Regular",
+        "color": "Polychromatic" if color_std > 35 else "Monochromatic",
+        "diameter": f"~{diameter_px * 0.1:.1f} mm" if diameter_px > 0 else "N/A" # Assumption: 0.1mm/px
     }
 
 # --- 3. Enhanced Explainability (Grad-CAM) ---
@@ -161,9 +167,16 @@ def predict_clinical(img, age, sex, site):
         triage = "🟢 LOW/MODERATE RISK"
         action = "Routine monitoring."
 
-    status_display = (f"{triage}\n\n"
-                      f"ABCDE Analysis:\n- Asymmetry: {abcde['asymmetry']}\n- Border: {abcde['border']}\n\n"
-                      f"{validity_msg}\nSuggested Action: {action}")
+    status_display = (
+        f"{triage}\n\n"
+        f"📊 ABCDE Feature Analysis:\n"
+        f"- Asymmetry (A): {abcde['asymmetry']}\n"
+        f"- Border (B): {abcde['border']}\n"
+        f"- Color (C): {abcde['color']}\n"
+        f"- Diameter (D): {abcde['diameter']}\n\n"
+        f"{validity_msg}\n"
+        f"Suggested Action: {action}"
+    )
 
     img_tensor.requires_grad = True
     heatmap = generate_gradcam(model, img_tensor, img, pred_idx)
