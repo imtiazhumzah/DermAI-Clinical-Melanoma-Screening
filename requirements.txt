@@ -3,8 +3,9 @@
 torch
 torchvision
 
-# --- UI & Interface ---
-gradio
+# --- UI & Interface (Pinned for Compatibility) ---
+gradio>=5.7.1
+huggingface-hub<1.0.0
 
 # --- Image Processing & Utils ---
 numpy
