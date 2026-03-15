@@ -69,15 +69,13 @@ def generate_gradcam(model, img_tensor, original_image, target_class_idx):
 from fpdf import XPos, YPos
 
 # --- 3. Updated Reporting Logic (fpdf2 2.7.8+ compatible) ---
+# --- 3. Updated Reporting Logic with Writable Path ---
 def generate_report(image, diagnosis, confidence, age, sex, site, status):
-    # Remove emojis for the PDF to avoid encoding errors
     clean_status = status.replace("🚨 ", "").replace("✅ ", "")
     
     pdf = FPDF()
     pdf.add_page()
     
-    # Updated syntax: 'Arial' is now 'helvetica', 'txt' is 'text'
-    # 'ln=True' is now new_x/new_y
     pdf.set_font("helvetica", 'B', 16)
     pdf.cell(0, 10, text="DermAI Clinical Screening Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
     
@@ -90,7 +88,7 @@ def generate_report(image, diagnosis, confidence, age, sex, site, status):
     pdf.set_font("helvetica", size=11)
     pdf.cell(0, 10, text=f"Age: {age} | Sex: {sex} | Site: {site}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     
-    pdf.ln(5) # Add a small vertical space
+    pdf.ln(5)
     
     pdf.set_font("helvetica", 'B', 12)
     pdf.cell(0, 10, text="Results:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -98,7 +96,8 @@ def generate_report(image, diagnosis, confidence, age, sex, site, status):
     pdf.cell(0, 10, text=f"Primary Diagnosis: {diagnosis} ({confidence})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.multi_cell(0, 10, text=f"Status: {clean_status}")
     
-    report_path = "clinical_report.pdf"
+    # FIX: Use /tmp/ to bypass Permission Denied errors in Docker
+    report_path = "/tmp/clinical_report.pdf" 
     pdf.output(report_path)
     return report_path
 
