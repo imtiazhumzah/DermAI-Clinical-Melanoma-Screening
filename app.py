@@ -5,6 +5,7 @@ import os
 import cv2
 import numpy as np
 import gc
+import re  # Added for robust emoji stripping
 from PIL import Image
 from fpdf import FPDF, XPos, YPos
 from datetime import datetime
@@ -42,10 +43,8 @@ def perform_ood_check(image):
     return is_valid, ("High" if is_valid else "Reduced")
 
 def calculate_abcde(img_cv, mask):
-    # A - Asymmetry
     flipped_h = cv2.flip(mask, 1)
     asymmetry = np.sum(cv2.absdiff(mask, flipped_h)) / (np.sum(mask) + 1e-8)
-    # B - Border & D - Diameter
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     compactness, diam_px = 0, 0
     if contours:
@@ -55,7 +54,6 @@ def calculate_abcde(img_cv, mask):
         if area > 0: compactness = (peri**2) / (4 * np.pi * area)
         _, _, w, h = cv2.boundingRect(cnt)
         diam_px = max(w, h)
-    # C - Color
     pixels = img_cv[mask > 0]
     color_std = np.std(pixels, axis=0).mean() if pixels.size > 0 else 0
     return {
@@ -66,7 +64,7 @@ def calculate_abcde(img_cv, mask):
     }
 
 def predict_with_uncertainty(model, img_tensor, iterations=10):
-    model.train() # Enable Dropout
+    model.train() 
     all_probs = []
     with torch.no_grad():
         for _ in range(iterations):
@@ -82,26 +80,24 @@ def generate_gradcam(model, img_tensor, original_image, target_class_idx):
     def b_hook(m, gi, go): gradients.append(go[0])
     h1 = target_layer.register_forward_hook(f_hook)
     h2 = target_layer.register_full_backward_hook(b_hook)
-    
     logits = model(img_tensor)
     model.zero_grad()
     logits[0, target_class_idx].backward()
-    
     grads, acts = gradients[0].detach(), activations[0].detach()
     weights = torch.mean(grads, dim=(2, 3), keepdim=True)
     cam = np.maximum(torch.sum(weights * acts, dim=1).squeeze().cpu().numpy(), 0)
     cam = cv2.resize(cam, (original_image.size[0], original_image.size[1]))
     cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-    
     heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_HOT)
     overlay = cv2.addWeighted(cv2.cvtColor(np.array(original_image), cv2.COLOR_RGB2BGR), 0.7, heatmap, 0.3, 0)
     h1.remove(); h2.remove()
     return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
 
-# --- 3. Clinical Reporting (Emoji-Safe) ---
+# --- 3. Clinical Reporting (Robust Emoji Fix) ---
 def generate_report(diag, conf, age, sex, site, status, abcde, stability):
-    # Clean emojis for PDF compatibility
-    clean_s = status.replace("🔴 ", "").replace("🟢 ", "").replace("📊 ", "").replace("🛡️ ", "").replace("✅ ", "").replace("⚠️ ", "")
+    # REGEX FIX: Removes all non-ASCII characters (emojis) for PDF safety
+    clean_s = re.sub(r'[^\x00-\x7F]+', '', status)
+    
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", 'B', 16)
@@ -123,20 +119,17 @@ def clinical_workflow(img, age, sex, site):
     if img is None: return [None]*6
     gc.collect()
     
-    # Vision Logic
     is_valid, reliability = perform_ood_check(img)
     img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
     _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     abcde = calculate_abcde(img_cv, mask)
     
-    # ML Logic
     img_tensor = transform(img).unsqueeze(0).to(DEVICE)
     mean_probs, std_probs = predict_with_uncertainty(model, img_tensor)
     idx, mel_prob = apply_clinical_logic(mean_probs, CLASSES)
     diag = CLASSES[idx]
     
-    # UI Strings
     stability = "High" if float(std_probs[idx]) < 0.08 else "Low"
     triage = "🔴 HIGH RISK" if (idx == 4 or mel_prob > 0.20) else "🟢 LOW RISK"
     
@@ -144,7 +137,6 @@ def clinical_workflow(img, age, sex, site):
                  f"📊 ABCDE: A:{abcde['A']} B:{abcde['B']} C:{abcde['C']} D:{abcde['D']}\n\n"
                  f"🛡️ Reliability: {reliability} | Stability: {stability}")
 
-    # Visuals
     heatmap = generate_gradcam(model, img_tensor.clone().detach().requires_grad_(True), img, idx)
     seg_view = cv2.drawContours(img_cv.copy(), cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0], -1, (0,255,0), 2)
     report = generate_report(diag, f"{mean_probs[idx]:.1%}", age, sex, site, status_ui, abcde, stability)
@@ -153,11 +145,10 @@ def clinical_workflow(img, age, sex, site):
     return confidences, status_ui, report, heatmap, cv2.cvtColor(seg_view, cv2.COLOR_BGR2RGB), stability
 
 # --- 5. UI Layout (4-Page Design) ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue")) as demo:
+with gr.Blocks() as demo:
     gr.Markdown("# 🩺 DermAI: Enterprise Dermatology Support")
     
     with gr.Tabs():
-        # PAGE 1: PRIMARY SCREENING
         with gr.Tab("📋 Patient Audit"):
             with gr.Row():
                 with gr.Column(scale=1):
@@ -172,7 +163,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue")) as demo:
                     out_status = gr.Textbox(label="Triage Summary", lines=10)
                     out_pdf = gr.File(label="Clinical PDF")
 
-        # PAGE 2: CLINICAL EXPLAINABILITY
         with gr.Tab("🔬 XAI & Metrics"):
             gr.Markdown("### Computer Vision Feature Extraction")
             with gr.Row():
@@ -181,7 +171,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue")) as demo:
             gr.Markdown("#### Objective Geometric Findings")
             gr.Markdown("These metrics are calculated via contour analysis to provide evidence for clinical triage.")
 
-        # PAGE 3: MODEL CARD & INTEGRITY
         with gr.Tab("🛡️ Model Transparency"):
             with gr.Row():
                 with gr.Column():
@@ -196,7 +185,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue")) as demo:
                     gr.Markdown("### Uncertainty Analysis")
                     out_stability = gr.Textbox(label="Prediction Stability Score")
 
-        # PAGE 4: DATASET ARCHIVE
         with gr.Tab("📊 Dataset Insights"):
             gr.Markdown("### Training Foundation: HAM10000")
             gr.Markdown("The model is benchmarked against 10,015 expert-labeled dermoscopic samples.")
@@ -205,7 +193,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue")) as demo:
                 value=[["MEL", "Melanoma", "11%"], ["NV", "Melanocytic Nevi", "67%"], ["BCC", "Basal Cell Carcinoma", "5%"]]
             )
 
-    # Event Mapping
     run_btn.click(
         fn=clinical_workflow,
         inputs=[input_img, age_in, sex_in, site_in],
@@ -213,4 +200,10 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue")) as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    # Moved theme here to satisfy Gradio 6.0
+    demo.launch(
+        server_name="0.0.0.0", 
+        server_port=7860, 
+        theme=gr.themes.Soft(primary_hue="blue"), 
+        show_error=True
+    )
