@@ -30,7 +30,7 @@ def perform_ood_check(image):
     sharpness_score = cv2.Laplacian(img_np, cv2.CV_64F).var()
     is_valid = sharpness_score > 50 
     reliability = "High" if is_valid else "Reduced"
-    validity_msg = "✅ Dermoscopic Likelihood: High" if is_valid else "⚠️ Image Validity: Low (Possible Blur/Non-Dermoscopic)"
+    validity_msg = "Dermoscopic Likelihood: High" if is_valid else "Image Validity: Low (Possible Blur/Non-Dermoscopic)"
     return is_valid, reliability, validity_msg
 
 def calculate_abcde(img_cv, mask):
@@ -96,8 +96,11 @@ def generate_gradcam(model, img_tensor, original_image, target_class_idx):
     h1.remove(); h2.remove()
     return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
 
-# --- 4. Clinical Reporting ---
-def generate_report(diagnosis, confidence, age, sex, site, status, abcde):
+# --- 4. Clinical Reporting (Emoji-Safe) ---
+def generate_report(diagnosis, confidence, age, sex, site, status_text, abcde):
+    # Strip emojis for PDF compatibility
+    clean_status = status_text.replace("🔴 ", "").replace("🟡 ", "").replace("🟢 ", "").replace("✅ ", "").replace("⚠️ ", "").replace("📊 ", "")
+    
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", 'B', 16)
@@ -117,7 +120,7 @@ def generate_report(diagnosis, confidence, age, sex, site, status, abcde):
     pdf.cell(0, 10, text="Automated Diagnostic Findings", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("helvetica", size=11)
     pdf.cell(0, 8, text=f"Prediction: {diagnosis} ({confidence})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.multi_cell(0, 8, text=f"Clinical Guidance: {status}")
+    pdf.multi_cell(0, 8, text=f"Clinical Guidance:\n{clean_status}")
     
     report_path = f"/tmp/DermAI_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
     pdf.output(report_path)
@@ -134,7 +137,7 @@ def predict_clinical(img, age, sex, site):
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
     _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
-    # 2. FULL ABCDE ANALYSIS (Fixed Call)
+    # 2. ABCDE ANALYSIS
     abcde = calculate_abcde(img_cv, mask)
     
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -163,6 +166,7 @@ def predict_clinical(img, age, sex, site):
         triage = "🟢 LOW RISK"
         action = "Routine clinical monitoring."
 
+    # This display text is for the Gradio UI (Emojis OK)
     status_display = (
         f"{triage}\n\n"
         f"📊 ABCDE Feature Analysis:\n"
@@ -170,12 +174,14 @@ def predict_clinical(img, age, sex, site):
         f"- Border (B): {abcde['border']}\n"
         f"- Color (C): {abcde['color']}\n"
         f"- Diameter (D): {abcde['diameter']}\n\n"
-        f"{validity_msg}\n"
+        f"{'✅' if is_valid else '⚠️'} {validity_msg}\n"
         f"Suggested Action: {action}"
     )
 
     img_tensor.requires_grad = True
     heatmap = generate_gradcam(model, img_tensor, img, pred_idx)
+    
+    # Pass status_display; generate_report will clean it
     report = generate_report(diag, conf_str, age, sex, site, status_display, abcde)
     confidences = {CLASSES[i]: float(probs[i]) for i in range(len(CLASSES))}
     
@@ -183,7 +189,6 @@ def predict_clinical(img, age, sex, site):
     return confidences, status_display, report, heatmap, segmentation_view
 
 # --- 6. UI Construction ---
-# Fixed: theme moved to launch()
 with gr.Blocks() as demo:
     gr.Markdown("# 🩺 DermAI: Decision Support Prototype")
     
@@ -212,7 +217,6 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    # Updated launch with theme
     demo.launch(
         server_name="0.0.0.0", 
         server_port=7860, 
