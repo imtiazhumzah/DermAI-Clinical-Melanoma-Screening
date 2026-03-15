@@ -1,35 +1,32 @@
-# 1. Use a lean Python base image
+# Use a lean Python base image
 FROM python:3.9-slim
 
-# 2. Set the working directory
+# Set the working directory
 WORKDIR /app
 
-# 3. Install necessary system dependencies for image processing
+# Install necessary system dependencies
+# We swapped libgl1-mesa-glx for libgl1 to fix the "Trixie" build error
 RUN apt-get update && apt-get install -y \
     build-essential \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. Copy requirements and install
-# Note: Using the --no-cache-dir flag keeps the image size small
+# Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. Copy all project files into the container
-# This includes app.py, model_utils.py, and your .pth weights
+# Copy all project files
 COPY . .
 
-# 6. Set up a non-root user for Hugging Face security
-# Hugging Face Spaces require the container to run as UID 1000
+# Set up a non-root user for Hugging Face security
 RUN useradd -m -u 1000 user
 USER user
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH
 
-# 7. Expose the port Gradio uses
+# Expose the port Gradio uses
 EXPOSE 7860
 
-# 8. Define the command to run your app
-# We use app.py as the entry point
+# Command to run your app
 CMD ["python", "app.py"]
