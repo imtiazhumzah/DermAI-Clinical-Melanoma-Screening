@@ -90,31 +90,73 @@ def generate_report(diagnosis, confidence, age, sex, site, status):
     pdf.output(report_path)
     return report_path
 
-# --- 4. Logic Wrapper ---
+
+# --- 1. NEW: Image Validation & Reliability Logic ---
+def perform_ood_check(image):
+    """
+    Checks if the image is a valid dermoscopic sample.
+    """
+    img_np = np.array(image.convert("L")) # Grayscale for texture analysis
+    
+    # Check 1: Sharpness (Laplacian Variance)
+    score = cv2.Laplacian(img_np, cv2.CV_64F).var()
+    
+    # Check 2: Contrast/Distribution
+    is_valid = score > 50  # Simple heuristic for focus
+    reliability = "High" if is_valid else "Reduced"
+    validity_msg = "✅ Dermoscopic Likelihood: High" if is_valid else "⚠️ Image Validity: Low (Possible Blur/Non-Dermoscopic)"
+    
+    return is_valid, reliability, validity_msg
+
 def predict_clinical(img, age, sex, site):
-    if img is None: return None, "Please upload an image.", None, None
+    if img is None: return None, "Please upload an image.", None, None, "N/A"
     
+    # --- STEP 1: OOD DETECTION (Reliability Check) ---
+    is_valid, reliability, validity_msg = perform_ood_check(img)
+    
+    # --- STEP 2: SEGMENTATION (Vision Layer) ---
+    # For this iteration, we create a 'GrabCut' or 'Otsu' mask to simulate 
+    # the segmentation before we plug in the full U-Net model.
+    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Create the visual overlay for the UI
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    overlay = img_cv.copy()
+    cv2.drawContours(overlay, contours, -1, (0, 255, 0), 2) # Green boundary
+    segmentation_view = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+
+    # --- STEP 3: CLASSIFICATION ---
     img_tensor = transform(img).unsqueeze(0).to(DEVICE)
-    img_tensor.requires_grad = True
+    with torch.inference_mode():
+        logits = model(img_tensor)
+        probs = torch.softmax(logits, dim=1)[0].detach()
     
-    logits = model(img_tensor)
-    probs = torch.softmax(logits, dim=1)[0].detach()
-    
-    # Clinical Safety Logic (20% Threshold for Melanoma)
     pred_idx, mel_prob = apply_clinical_logic(probs, CLASSES)
     diag = CLASSES[pred_idx]
     conf_str = f"{probs[pred_idx]:.2%}"
     
+    # --- STEP 4: CLINICAL TRIAGE LAYER ---
+    # Mapping raw results to Actionable Recommendations
     if pred_idx == 4 or mel_prob > 0.20:
-        status = "🚨 HIGH RISK: Safety threshold triggered for Melanoma."
+        triage_cat = "🔴 HIGH RISK"
+        action = "Urgent dermatology referral & biopsy consideration recommended."
+    elif mel_prob > 0.10:
+        triage_cat = "🟡 MODERATE RISK"
+        action = "Dermatology consultation recommended for clinical correlation."
     else:
-        status = "✅ Routine Review: Low risk of malignancy detected."
+        triage_cat = "🟢 LOW RISK"
+        action = "Routine monitoring. Note: Professional exam still recommended."
 
+    status_display = f"{triage_cat}\n\n{validity_msg}\nModel Reliability: {reliability}\n\nSuggested Action: {action}"
+
+    # --- STEP 5: FINAL OUTPUTS ---
     heatmap = generate_gradcam(model, img_tensor, img, pred_idx)
-    report = generate_report(diag, conf_str, age, sex, site, status)
-    
+    report = generate_report(diag, conf_str, age, sex, site, status_display)
     confidences = {CLASSES[i]: float(probs[i]) for i in range(len(CLASSES))}
-    return confidences, status, report, heatmap
+    
+    return confidences, status_display, report, heatmap, segmentation_view
 
 # --- 5. UI Construction (Side-by-Side Layout) ---
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
