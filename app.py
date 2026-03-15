@@ -34,14 +34,8 @@ def perform_ood_check(image):
     return is_valid, reliability, validity_msg
 
 def calculate_abcde(img_cv, mask):
-    """
-    Computes A, B, C, and D indicators from the lesion and its mask.
-    """
-    # 1. Asymmetry (A)
     flipped_h = cv2.flip(mask, 1)
     asymmetry_score = np.sum(cv2.absdiff(mask, flipped_h)) / (np.sum(mask) + 1e-8)
-    
-    # 2. Border Irregularity (B) & 4. Diameter (D)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     compactness = 0
     diameter_px = 0
@@ -49,12 +43,9 @@ def calculate_abcde(img_cv, mask):
         cnt = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(cnt)
         perimeter = cv2.arcLength(cnt, True)
-        if area > 0:
-            compactness = (perimeter**2) / (4 * np.pi * area)
+        if area > 0: compactness = (perimeter**2) / (4 * np.pi * area)
         _, _, w_box, h_box = cv2.boundingRect(cnt)
         diameter_px = max(w_box, h_box)
-
-    # 3. Color Variation (C)
     pixels = img_cv[mask > 0]
     color_std = np.std(pixels, axis=0).mean() if pixels.size > 0 else 0
 
@@ -65,8 +56,29 @@ def calculate_abcde(img_cv, mask):
         "diameter": f"~{diameter_px * 0.1:.1f} mm" if diameter_px > 0 else "N/A"
     }
 
-# --- 3. Enhanced Explainability (Grad-CAM) ---
+# --- 3. Step 3: Monte Carlo Dropout Logic ---
+def predict_with_uncertainty(model, img_tensor, iterations=10):
+    """
+    Enables dropout during inference to estimate model confidence.
+    """
+    model.train() # Keep dropout layers active
+    all_probs = []
+    
+    with torch.no_grad():
+        for _ in range(iterations):
+            logits = model(img_tensor)
+            probs = torch.softmax(logits, dim=1)
+            all_probs.append(probs)
+    
+    all_probs = torch.cat(all_probs)
+    mean_probs = all_probs.mean(dim=0)
+    std_probs = all_probs.std(dim=0) # Measure of uncertainty
+    
+    return mean_probs, std_probs
+
+# --- 4. Enhanced Explainability (Grad-CAM) ---
 def generate_gradcam(model, img_tensor, original_image, target_class_idx):
+    model.eval() # Ensure static weights for Grad-CAM
     target_layer = model.features[7] 
     activations, gradients = [], []
     def forward_hook(module, input, output): activations.append(output)
@@ -96,11 +108,9 @@ def generate_gradcam(model, img_tensor, original_image, target_class_idx):
     h1.remove(); h2.remove()
     return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
 
-# --- 4. Clinical Reporting (Emoji-Safe) ---
-def generate_report(diagnosis, confidence, age, sex, site, status_text, abcde):
-    # Strip emojis for PDF compatibility
-    clean_status = status_text.replace("🔴 ", "").replace("🟡 ", "").replace("🟢 ", "").replace("✅ ", "").replace("⚠️ ", "").replace("📊 ", "")
-    
+# --- 5. Clinical Reporting ---
+def generate_report(diagnosis, confidence, age, sex, site, status_text, abcde, uncertainty):
+    clean_status = status_text.replace("🔴 ", "").replace("🟡 ", "").replace("🟢 ", "").replace("✅ ", "").replace("⚠️ ", "").replace("📊 ", "").replace("🛡️ ", "")
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", 'B', 16)
@@ -110,87 +120,84 @@ def generate_report(diagnosis, confidence, age, sex, site, status_text, abcde):
     pdf.line(10, 32, 200, 32); pdf.ln(5)
 
     pdf.set_font("helvetica", 'B', 12)
-    pdf.cell(0, 10, text="Dermatological Indicators (ABCDE Analysis)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, text="Reliability & Uncertainty Analysis", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("helvetica", size=11)
-    pdf.cell(0, 8, text=f"Asymmetry: {abcde['asymmetry']} | Border: {abcde['border']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(0, 8, text=f"Color: {abcde['color']} | Diameter: {abcde['diameter']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 8, text=f"Prediction Stability: {uncertainty}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     
     pdf.ln(5)
     pdf.set_font("helvetica", 'B', 12)
-    pdf.cell(0, 10, text="Automated Diagnostic Findings", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, text="Clinical Indicators (ABCDE)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("helvetica", size=11)
+    pdf.cell(0, 8, text=f"Asymmetry: {abcde['asymmetry']} | Border: {abcde['border']} | Color: {abcde['color']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    
+    pdf.ln(5)
+    pdf.set_font("helvetica", 'B', 12)
+    pdf.cell(0, 10, text="Diagnostic Findings", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("helvetica", size=11)
     pdf.cell(0, 8, text=f"Prediction: {diagnosis} ({confidence})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.multi_cell(0, 8, text=f"Clinical Guidance:\n{clean_status}")
+    pdf.multi_cell(0, 8, text=f"Guidance:\n{clean_status}")
     
     report_path = f"/tmp/DermAI_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
     pdf.output(report_path)
     return report_path
 
-# --- 5. Main Clinical Pipeline ---
+# --- 6. Main Pipeline ---
 def predict_clinical(img, age, sex, site):
     if img is None: return [None] * 5
     gc.collect()
     
-    # 1. Validation & Segmentation
     is_valid, reliability, validity_msg = perform_ood_check(img)
     img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
     _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
-    # 2. ABCDE ANALYSIS
     abcde = calculate_abcde(img_cv, mask)
-    
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     seg_overlay = img_cv.copy()
     cv2.drawContours(seg_overlay, contours, -1, (0, 255, 0), 2)
     segmentation_view = cv2.cvtColor(seg_overlay, cv2.COLOR_BGR2RGB)
 
-    # 3. Classification
+    # STEP 3: Classification with MC Dropout
     img_tensor = transform(img).unsqueeze(0).to(DEVICE)
-    with torch.inference_mode():
-        logits = model(img_tensor)
-        probs = torch.softmax(logits, dim=1)[0].detach()
+    mean_probs, std_probs = predict_with_uncertainty(model, img_tensor, iterations=10)
     
-    pred_idx, mel_prob = apply_clinical_logic(probs, CLASSES)
+    pred_idx, mel_prob = apply_clinical_logic(mean_probs, CLASSES)
     diag = CLASSES[pred_idx]
-    conf_str = f"{probs[pred_idx]:.2%}"
+    conf_str = f"{mean_probs[pred_idx]:.2%}"
     
-    # 4. Actionable Triage Mapping
+    # Calculate stability based on standard deviation
+    uncertainty_val = float(std_probs[pred_idx])
+    stability = "High" if uncertainty_val < 0.05 else "Moderate" if uncertainty_val < 0.15 else "Low"
+
     if pred_idx == 4 or mel_prob > 0.20:
         triage = "🔴 HIGH RISK"
-        action = "Urgent dermatology referral recommended."
-    elif mel_prob > 0.10:
-        triage = "🟡 MODERATE RISK"
-        action = "Clinical correlation required."
+        action = "Urgent referral recommended."
     else:
         triage = "🟢 LOW RISK"
         action = "Routine clinical monitoring."
 
-    # This display text is for the Gradio UI (Emojis OK)
     status_display = (
         f"{triage}\n\n"
         f"📊 ABCDE Feature Analysis:\n"
-        f"- Asymmetry (A): {abcde['asymmetry']}\n"
-        f"- Border (B): {abcde['border']}\n"
-        f"- Color (C): {abcde['color']}\n"
-        f"- Diameter (D): {abcde['diameter']}\n\n"
-        f"{'✅' if is_valid else '⚠️'} {validity_msg}\n"
+        f"- Asymmetry (A): {abcde['asymmetry']} | Border (B): {abcde['border']}\n"
+        f"- Color (C): {abcde['color']} | Diameter (D): {abcde['diameter']}\n\n"
+        f"🛡️ Reliability Analysis:\n"
+        f"- {validity_msg}\n"
+        f"- Prediction Stability: {stability} (Var: {uncertainty_val:.4f})\n\n"
         f"Suggested Action: {action}"
     )
 
     img_tensor.requires_grad = True
     heatmap = generate_gradcam(model, img_tensor, img, pred_idx)
-    
-    # Pass status_display; generate_report will clean it
-    report = generate_report(diag, conf_str, age, sex, site, status_display, abcde)
-    confidences = {CLASSES[i]: float(probs[i]) for i in range(len(CLASSES))}
+    report = generate_report(diag, conf_str, age, sex, site, status_display, abcde, stability)
+    confidences = {CLASSES[i]: float(mean_probs[i]) for i in range(len(CLASSES))}
     
     del img_tensor; gc.collect()
     return confidences, status_display, report, heatmap, segmentation_view
 
-# --- 6. UI Construction ---
+# --- 7. UI ---
 with gr.Blocks() as demo:
-    gr.Markdown("# 🩺 DermAI: Decision Support Prototype")
+    gr.Markdown("# 🩺 DermAI: Clinical Decision Support System")
     
     with gr.Row():
         with gr.Column(scale=2):
@@ -203,11 +210,11 @@ with gr.Blocks() as demo:
         
         with gr.Column(scale=3):
             with gr.Row():
-                output_heatmap = gr.Image(label="Grad-CAM (CNN Focus)")
+                output_heatmap = gr.Image(label="Grad-CAM Focus Area")
                 output_seg = gr.Image(label="Lesion Segmentation")
             
-            output_labels = gr.Label(label="Diagnostic Confidence")
-            output_status = gr.Textbox(label="Clinical Indicators & Triage", lines=10)
+            output_labels = gr.Label(label="Diagnostic Probabilities (Mean)")
+            output_status = gr.Textbox(label="Clinical Indicators, Reliability & Triage", lines=12)
             output_pdf = gr.File(label="Download Clinical Report")
 
     run_btn.click(
@@ -217,9 +224,4 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(
-        server_name="0.0.0.0", 
-        server_port=7860, 
-        theme=gr.themes.Soft(), 
-        show_error=True
-    )
+    demo.launch(server_name="0.0.0.0", server_port=7860, theme=gr.themes.Soft(), show_error=True)
