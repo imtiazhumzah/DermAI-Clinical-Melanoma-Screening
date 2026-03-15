@@ -66,31 +66,43 @@ def generate_gradcam(model, img_tensor, original_image, target_class_idx):
     return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
 
 # --- 3. Reporting Logic ---
+from fpdf import XPos, YPos
+
+# --- 3. Updated Reporting Logic (fpdf2 2.7.8+ compatible) ---
 def generate_report(image, diagnosis, confidence, age, sex, site, status):
+    # Remove emojis for the PDF to avoid encoding errors
+    clean_status = status.replace("🚨 ", "").replace("✅ ", "")
+    
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="DermAI Clinical Screening Report", ln=True, align='C')
-    pdf.set_font("Arial", size=10)
-    pdf.cell(200, 10, txt=f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
+    
+    # Updated syntax: 'Arial' is now 'helvetica', 'txt' is 'text'
+    # 'ln=True' is now new_x/new_y
+    pdf.set_font("helvetica", 'B', 16)
+    pdf.cell(0, 10, text="DermAI Clinical Screening Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    
+    pdf.set_font("helvetica", size=10)
+    pdf.cell(0, 10, text=f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.line(10, 30, 200, 30)
     
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(200, 10, txt="Patient Info:", ln=True)
-    pdf.set_font("Arial", size=11)
-    pdf.cell(200, 10, txt=f"Age: {age} | Sex: {sex} | Site: {site}", ln=True)
+    pdf.set_font("helvetica", 'B', 12)
+    pdf.cell(0, 10, text="Patient Info:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("helvetica", size=11)
+    pdf.cell(0, 10, text=f"Age: {age} | Sex: {sex} | Site: {site}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(200, 10, txt="Results:", ln=True)
-    pdf.set_font("Arial", size=11)
-    pdf.cell(200, 10, txt=f"Primary Diagnosis: {diagnosis} ({confidence})", ln=True)
-    pdf.multi_cell(0, 10, txt=f"Status: {status}")
+    pdf.ln(5) # Add a small vertical space
+    
+    pdf.set_font("helvetica", 'B', 12)
+    pdf.cell(0, 10, text="Results:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("helvetica", size=11)
+    pdf.cell(0, 10, text=f"Primary Diagnosis: {diagnosis} ({confidence})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.multi_cell(0, 10, text=f"Status: {clean_status}")
     
     report_path = "clinical_report.pdf"
     pdf.output(report_path)
     return report_path
 
-# --- 4. Prediction Wrapper ---
+# --- 4. Prediction Wrapper (Updated to prevent UserWarning) ---
 def predict_clinical(img, age, sex, site):
     if img is None: return None, "Upload image.", None, None
     
@@ -98,7 +110,8 @@ def predict_clinical(img, age, sex, site):
     img_tensor.requires_grad = True
     
     logits = model(img_tensor)
-    probs = torch.softmax(logits, dim=1)[0]
+    # Using .detach() here prevents the PyTorch UserWarning
+    probs = torch.softmax(logits, dim=1)[0].detach() 
     
     pred_idx, mel_prob = apply_clinical_logic(probs, CLASSES)
     diag = CLASSES[pred_idx]
@@ -109,6 +122,7 @@ def predict_clinical(img, age, sex, site):
     else:
         status = f"✅ Routine Review: Melanoma probability ({mel_prob:.2%}) low."
 
+    # Need the tensor with grad for Grad-CAM, so we pass it separately or re-run
     heatmap = generate_gradcam(model, img_tensor, img, pred_idx)
     report = generate_report(img, diag, conf_str, age, sex, site, status)
     
