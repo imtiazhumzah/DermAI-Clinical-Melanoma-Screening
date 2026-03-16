@@ -10,7 +10,7 @@ short_description: Melanoma screening via ConvNeXt & HAM10000 dataset
 models:
 - imtiazhumzah/DermAI-Clinical-Screen
 datasets:
-- ham10000
+- kuchikihater/HAM10000
 tags:
 - medical-imaging
 - dermatology
