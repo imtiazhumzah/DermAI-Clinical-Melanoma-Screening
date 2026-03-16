@@ -47,3 +47,4 @@ Ham10000_examples/ISIC_0024318.jpg filter=lfs diff=lfs merge=lfs -text
 Ham10000_examples/ISIC_0024319.jpg filter=lfs diff=lfs merge=lfs -text
 Ham10000_examples/ISIC_0024340.jpg filter=lfs diff=lfs merge=lfs -text
 Ham10000_examples/ISIC_0024344.jpg filter=lfs diff=lfs merge=lfs -text
+Ham10000_examples/ISIC_0024368.jpg filter=lfs diff=lfs merge=lfs -text
