@@ -1,5 +1,5 @@
 ---
-title: DermAI Clinical Melanoma Screening
+title: DermAI-Clinical-Melanoma-Screening
 emoji: 🧬
 colorFrom: blue
 colorTo: green
@@ -57,5 +57,4 @@ The model was trained using the **HAM10000** ("Human Against Machine") dataset, 
 - **Reporting:** FPDF2 for automated clinical PDF generation
 
 ---
-**Developed by:** [Imtiaz Humzah](https://huggingface.co/imtiazhumzah)  
-
+**Developed by:** [Imtiaz Humzah](https://huggingface.co/imtiazhumzah)
