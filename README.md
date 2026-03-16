@@ -37,7 +37,13 @@ DermAI automates the standard clinical ABCDE criteria through computer vision:
 - **(D) Diameter:** Estimated lesion sizing based on pixel-to-mm scaling.
 
 ## 📊 Dataset & Training
-This model was trained on the **HAM10000** ("Human Against Machine") dataset, containing 10,015 expert-labeled dermatoscopic images. 
+The model was trained using the **HAM10000** ("Human Against Machine") dataset, a benchmark in medical AI for dermatology. 
+
+- **Total Images:** 10,015 dermatoscopic samples.
+- **Source:** Multi-source collection from the Medical University of Vienna and the University of Queensland.
+- **Verification:** Over 50% of cases are histopathology-confirmed (the gold standard in medical diagnostics).
+- **Access:** [View Dataset on Hugging Face](https://huggingface.co/datasets/kuchikihater/HAM10000)
+
 - **Preprocessing:** Focal Loss for class imbalance, Test-Time Augmentation (TTA), and ImageNet-standard normalization.
 - **Performance Goal:** Prioritized **Recall for Melanoma (MEL)** to minimize false negatives in a screening context.
 
