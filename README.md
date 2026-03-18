@@ -1,6 +1,5 @@
 ---
 title: DermAI-Clinical-Melanoma-Screening
-[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Space-blue)](https://huggingface.co/spaces/imtiazhumzah/DermAI-Clinical-Melanoma-Screening)
 emoji: 🧬
 colorFrom: blue
 colorTo: green
@@ -21,6 +20,7 @@ tags:
 ---
 
 # 🩺 DermAI: Advanced Clinical Melanoma Screening
+[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Space-blue)](https://huggingface.co/spaces/imtiazhumzah/DermAI-Clinical-Melanoma-Screening)
 
 **DermAI** is a state-of-the-art decision support tool designed for clinical-grade dermatoscopic analysis. Moving beyond simple classification, DermAI implements an audit-ready pipeline that provides clinicians with diagnostic probabilities, uncertainty estimations, and visual evidence.
 
