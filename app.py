@@ -11,7 +11,7 @@ from fpdf import FPDF, XPos, YPos
 from datetime import datetime
 
 # Import your architecture and logic from local files
-from model_utils import get_model, get_transforms, apply_clinical_logic
+from src.model_utils import get_model, get_transforms, apply_clinical_logic
 
 # --- 1. Setup & Configuration ---
 DEVICE = torch.device("cpu")
